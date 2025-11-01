@@ -6,11 +6,10 @@ on:
 
 jobs:
   Deploy:
-    name: Deploy
+    name: Build and check
     runs-on: ubuntu-latest
     env:
       GO111MODULE: on
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -39,4 +38,6 @@ jobs:
       - uses: dominikh/staticcheck-action@v1
         with:
           version: "latest"
+      - name: Build
+        run: go build ./main.go
 
