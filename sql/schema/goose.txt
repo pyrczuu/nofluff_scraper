@@ -1,0 +1,1 @@
+goose sqlite3 ./../../database/jobs.db [command] 
