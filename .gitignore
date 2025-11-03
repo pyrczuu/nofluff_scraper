@@ -31,5 +31,5 @@ go.work.sum
 # .idea/
 # .vscode/
 
-./database/jobs.db
+/database/jobs.db
 out
