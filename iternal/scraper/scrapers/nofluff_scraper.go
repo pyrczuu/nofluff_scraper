@@ -1,133 +1,249 @@
 package scrapers
 
 import (
+	"bufio"
 	"context"
 	"log"
-	"regexp"
+	"math/rand"
+	"os"
 	"strings"
 	"time"
 
-	"github.com/gocolly/colly"
+	"github.com/PuerkitoBio/goquery"
+	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/chromedp"
 	"github.com/pfczx/jobscraper/iternal/scraper"
 )
 
-const (
-	titleSelector         = "div.posting-details-description h1"
-	companySelector       = "a#postingCompanyUrl"
-	locationSelector      = "span.locations-text span"
-	descriptionSelector   = "#posting-description nfj-read-more"
-	skillsSelector        = "#JobOfferRequirements nfj-read-more"
-	salarySectionSelector = `div.salary.ng-star-inserted`
-	salaryAmountSelector  = `h4`
-	contractTypeSelector  = `div.paragraph`
-)
-
-type NoFluffScraper struct {
-	timeoutBetweenScraps time.Duration
-	collector            *colly.Collector
-	urls                 []string
+var proxyList = []string{
+	"213.73.25.231:8080",
 }
 
-// controls
-func NewNoFLuffScraper(urls []string) *NoFluffScraper {
-	c := colly.NewCollector(
-		colly.AllowedDomains("www.nofluffjobs.com", "nofluffjobs.com"),
-		//colly.Async(true),
-	)
+// selectors
+const (
+	titleSelector            = "div.posting-details-description h1"
+	companySelector          = "a#postingCompanyUrl"
+	locationSelector         = "span.locations-text span"
+	descriptionSelector      = "#posting-description nfj-read-more"
+	skillsSelector           = "#posting-requirements"
+	salarySectionSelector    = "common-posting-salaries-list div.salary"
+	requirementsSelector     = "#JobOfferRequirements nfj-read-more"
+	responsibilitiesSelector = "postings-tasks ol li"
+	hybridLocationSelector   = "div.popover-body ul li a"
+)
 
-	// #nosec G104 - false positive i guess
-	c.Limit(&colly.LimitRule{
-		DomainGlob:  "*nofluffjobs.com*",
-		Parallelism: 2,
-		RandomDelay: 2 * time.Second,
-	})
+// wait times are random (min,max) in seconds
+type NoFluffScraper struct {
+	minTimeS int
+	maxTimeS int
+	urls     []string
+}
 
+func NewNoFluffScraper(urls []string) *NoFluffScraper {
 	return &NoFluffScraper{
-		timeoutBetweenScraps: 10 * time.Second,
-		collector:            c,
-		urls:                 urls,
+		minTimeS: 5,
+		maxTimeS: 10,
+		urls:     urls,
 	}
 }
 
 func (*NoFluffScraper) Source() string {
-	return "nofluffjobs.com"
+	return "https://nofluffjobs.com/pl"
 }
 
-func (p *NoFluffScraper) Scrape(ctx context.Context, q chan<- scraper.JobOffer) error {
-	p.collector.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+func waitForCaptcha() {
+	log.Println("Cloudflare detected, solve and press enter")
+	reader := bufio.NewReader(os.Stdin)
+	reader.ReadBytes('\n')
+}
 
-	// regex do wyciągania typu umowy
-	r := regexp.MustCompile(`\(([^)]+)\)`)
+// extracting data from string html with goquer selectors
+func (p *NoFluffScraper) extractDataFromHTML(html string, url string) (scraper.JobOffer, error, bool) {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		log.Printf("goquery parse error: %v", err)
+		return scraper.JobOffer{}, err, false
+	}
 
-	p.collector.OnHTML("html", func(e *colly.HTMLElement) {
-		select {
-		case <-ctx.Done():
-			return
-		default:
+	if strings.Contains(html, "Verifying you are human") {
+		waitForCaptcha()
+		return scraper.JobOffer{}, nil, true
+	}
+
+	var job scraper.JobOffer
+	job.URL = url
+	job.Source = p.Source()
+	job.Title = strings.TrimSpace(doc.Find(titleSelector).Text())
+
+	company := strings.TrimSpace(doc.Find(companySelector).Text())
+	unwantedDetails := []string{
+		"O firmie",
+		"About company",
+		"About the company",
+	}
+
+	for _, u := range unwantedDetails {
+		company = strings.TrimSuffix(company, u)
+	}
+
+	job.Company = strings.TrimSpace(company)
+
+	//first element is usually an andress
+	job.Location = strings.TrimSpace(doc.Find(locationSelector).Text())
+	job.Location += ", "
+	doc.Find(locationSelector).Each(func(i int, li *goquery.Selection) {
+		value := strings.ToLower(strings.TrimSpace(li.Find(`div[data-test="offer-badge-title"]`).Text()))
+
+		if !strings.Contains(value, "Praca zdalna") {
+			if strings.Contains(value, "Hybrydowo") {
+				value = strings.TrimSpace(doc.Find(hybridLocationSelector).Text())
+			}
+			job.Location += value
 		}
 
-		var job scraper.JobOffer
-		job.URL = e.Request.URL.String()
-		job.Source = p.Source()
-		job.Title = e.ChildText(titleSelector)
-		job.Company = e.ChildText(companySelector)
-		job.Location = e.ChildText(locationSelector)
+	})
 
-		// description
-		e.ForEach(descriptionSelector+" li", func(_ int, el *colly.HTMLElement) {
-			if text := el.Text; text != "" {
-				job.Description += text + "\n"
+	var htmlBuilder strings.Builder
+
+	//description
+	descText := strings.TrimSpace(doc.Find(descriptionSelector).Text())
+	if descText != "" {
+		htmlBuilder.WriteString("<p>" + descText + "</p>\n")
+	}
+
+	//requirements
+	doc.Find(requirementsSelector).Each(func(i int, s *goquery.Selection) {
+		heading := strings.TrimSpace(s.Find("h2, h3").First().Text())
+		if heading != "" {
+			htmlBuilder.WriteString("<h2>" + heading + "</h2>\n")
+		}
+
+		htmlBuilder.WriteString("<ul>\n")
+		s.Find("li").Each(func(j int, li *goquery.Selection) {
+			text := strings.TrimSpace(li.Text())
+			if text != "" {
+				htmlBuilder.WriteString("<li>" + text + "</li>\n")
 			}
 		})
+		htmlBuilder.WriteString("</ul>\n")
+	})
 
-		// skills
-		var skills []string
-		e.ForEach(skillsSelector, func(_ int, el *colly.HTMLElement) {
-			if text := el.Text; text != "" {
-				skills = append(skills, text)
+	//responsibilities
+	doc.Find(responsibilitiesSelector).Each(func(i int, s *goquery.Selection) {
+		heading := strings.TrimSpace(s.Find("h2, h3").First().Text())
+		if heading != "" {
+			htmlBuilder.WriteString("<h3>" + heading + "</h3>\n")
+		}
+
+		htmlBuilder.WriteString("<ul>\n")
+		s.Find("li").Each(func(j int, li *goquery.Selection) {
+			text := strings.TrimSpace(li.Text())
+			if text != "" {
+				htmlBuilder.WriteString("<li>" + text + "</li>\n")
 			}
 		})
-		job.Skills = skills
+		htmlBuilder.WriteString("</ul>\n")
+	})
 
-		// salary
+	job.Description = htmlBuilder.String()
 
-		e.ForEach(contractTypeSelector, func(_ int, el *colly.HTMLElement) {
-			amount := el.ChildText(salaryAmountSelector)
-			amount = strings.ReplaceAll(amount, "&nbsp;", " ")
-			amount = strings.ReplaceAll(amount, "PLN", "zł")
-			amount = strings.TrimSpace(amount)
+	doc.Find(skillsSelector).Each(func(_ int, s *goquery.Selection) {
+		t := strings.TrimSpace(s.Text())
+		if t != "" {
+			job.Skills = append(job.Skills, t)
+		}
+	})
+	doc.Find("common-posting-salaries-list div.salary").Each(func(_ int, s *goquery.Selection) {
+		description := strings.ToLower(s.Find(".paragraph").Text())
 
-			sectionText := strings.TrimSpace(el.Text)
-			ctype := r.FindString(sectionText)
-
-			if ctype == "UoP" {
-				job.SalaryEmployment = amount
-			}
-			if ctype == "UZ" {
-				job.SalaryContract = amount
-			}
-			if ctype == "B2B" {
-				job.SalaryB2B = amount
-			}
-		})
-
-		select {
-		case <-ctx.Done():
+		if strings.Contains(description, "godzinę") || strings.Contains(description, "hour") {
 			return
-		case q <- job:
+		}
+
+		rawAmount := s.Find("h4").Text()
+		amount := strings.TrimSpace(strings.ReplaceAll(rawAmount, "\u00a0", " "))
+
+		switch {
+		case strings.Contains(description, "uop") || strings.Contains(description, "employment"):
+			job.SalaryEmployment = amount
+		case strings.Contains(description, "uz") || strings.Contains(description, "mandate"):
+			job.SalaryContract = amount
+		case strings.Contains(description, "b2b"):
+			job.SalaryB2B = amount
 		}
 	})
 
-	// Pętla po URL-ach
-	for _, url := range p.urls {
-		time.Sleep(p.timeoutBetweenScraps)
-		log.Println("Waiting timeoutBetweenScraps")
-		if err := p.collector.Visit(url); err != nil {
-			log.Printf("Visit error: %v", err)
-			return err
+	return job, nil, false
+}
+
+// html chromedp
+func (p *NoFluffScraper) getHTMLContent(chromeDpCtx context.Context, url string) (string, error) {
+	var html string
+
+	//chromdp run config
+	err := chromedp.Run(
+		chromeDpCtx,
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			return emulation.SetDeviceMetricsOverride(1280, 900, 1.0, false).Do(ctx)
+		}),
+		chromedp.Navigate(url),
+		chromedp.Evaluate(`delete navigator.__proto__.webdriver`, nil),
+		chromedp.Evaluate(`Object.defineProperty(navigator, "webdriver", { get: () => false })`, nil),
+		chromedp.Sleep(time.Duration(rand.Intn(800)+300)*time.Millisecond),
+		chromedp.WaitVisible("body", chromedp.ByQuery),
+		chromedp.OuterHTML("html", &html),
+	)
+	return html, err
+}
+
+// main func for scraping
+func (p *NoFluffScraper) Scrape(ctx context.Context, q chan<- scraper.JobOffer) error {
+
+	//chromdp config
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.ExecPath("/usr/bin/google-chrome"),
+		chromedp.UserDataDir(browserDataDir),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("headless", false),
+		chromedp.Flag("disable-gpu", false),
+		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "+
+			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"),
+		//chromedp.Flag("proxy-server", proxyList[rand.Intn(len(proxyList))]),
+		chromedp.Flag("disable-web-security", true),
+		chromedp.Flag("disable-site-isolation-trials", true),
+	)
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
+	defer cancelAlloc()
+
+	chromeDpCtx, cancelCtx := chromedp.NewContext(allocCtx)
+	defer cancelCtx()
+
+	for i := 0; i < len(p.urls); i++ {
+		url := p.urls[i]
+		html, err := p.getHTMLContent(chromeDpCtx, url)
+		if err != nil {
+			log.Printf("Chromedp error: %v", err)
+			continue
 		}
+
+		job, err, captchaAppeared := p.extractDataFromHTML(html, url)
+		if captchaAppeared == true {
+			time.Sleep(5 * time.Second)
+			i--
+			continue
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case q <- job:
+		}
+
+		log.Printf("Scraped %d: %s", i+1, url)
+		randomDelay := rand.Intn(p.maxTimeS-p.minTimeS) + p.minTimeS
+		log.Printf("Sleeping for: %ds", randomDelay)
+		time.Sleep(time.Duration(randomDelay) * time.Second)
 	}
 
-	p.collector.Wait()
 	return nil
 }

@@ -24,12 +24,16 @@ func main() {
 
 	ctx := context.Background()
 
-	urls, err := scrapers.ScrollAndRead(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
+	//urls, err := scrapers.ScrollAndRead(ctx)
+	//if err != nil {
+	//	log.Fatal(err)
+	//}
+	urls := []string{
+		"https://nofluffjobs.com/pl/job/c-software-engineer-motorola-solutions-systems-polska-krakow-13",
+		"https://nofluffjobs.com/pl/job/junior-python-engineer-acaisoft-remote-1",
+		"https://nofluffjobs.com/pl/job/tester-manualny-astek-polska-warszawa-4"}
 
-	noFluffScraper := scrapers.NewNoFLuffScraper(urls)
+	noFluffScraper := scrapers.NewNoFluffScraper(urls)
 
 	scrapersList := []scraper.Scraper{noFluffScraper}
 
