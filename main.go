@@ -29,10 +29,9 @@ func main() {
 	//	log.Fatal(err)
 	//}
 	urls := []string{
-		"https://nofluffjobs.com/pl/job/c-software-engineer-motorola-solutions-systems-polska-krakow-13",
-		"https://nofluffjobs.com/pl/job/junior-python-engineer-acaisoft-remote-1",
-		"https://nofluffjobs.com/pl/job/tester-manualny-astek-polska-warszawa-4"}
-
+		"https://nofluffjobs.com/pl/job/senior-android-engineer-ringier-axel-springer-tech-wroclaw-4",
+		"https://nofluffjobs.com/pl/job/analityk-biznesowo-systemowy-connectis--remote-6",
+		"https://nofluffjobs.com/pl/job/senior-c-go-engineer-motorola-solutions-systems-polska-krakow-1"}
 	noFluffScraper := scrapers.NewNoFluffScraper(urls)
 
 	scrapersList := []scraper.Scraper{noFluffScraper}

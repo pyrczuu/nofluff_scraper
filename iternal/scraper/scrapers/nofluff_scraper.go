@@ -89,19 +89,24 @@ func (p *NoFluffScraper) extractDataFromHTML(html string, url string) (scraper.J
 	job.Company = strings.TrimSpace(company)
 
 	//first element is usually an andress
-	job.Location = strings.TrimSpace(doc.Find(locationSelector).Text())
-	job.Location += ", "
-	doc.Find(locationSelector).Each(func(i int, li *goquery.Selection) {
-		value := strings.ToLower(strings.TrimSpace(li.Find(`div[data-test="offer-badge-title"]`).Text()))
-
-		if !strings.Contains(value, "Praca zdalna") {
-			if strings.Contains(value, "Hybrydowo") {
-				value = strings.TrimSpace(doc.Find(hybridLocationSelector).Text())
-			}
-			job.Location += value
-		}
-
-	})
+	rawLocation := strings.TrimSpace(doc.Find(locationSelector).Text())
+	// location pin, not always present
+	locationPin := doc.Find("[data-cy='location_pin'] span")
+	if strings.Contains(rawLocation, "Praca zdalna") {
+		job.Location = "Zdalnie"
+	} else if strings.Contains(rawLocation, "Hybrydowo") {
+		job.Location = "Hybrydowo, "
+		// znajduje lokalizacje z pop upa i usuwa słowo "Hybrydowo" które zawsze było przyklejone na końcu bez spacji"
+		location := strings.TrimSpace(doc.Find(hybridLocationSelector).Text())
+		job.Location += location
+	} else {
+		job.Location = ""
+	}
+	if locationPin.Length() > 0 {
+		location := strings.TrimSpace(locationPin.First().Text())
+		location = strings.ReplaceAll(location, "Hybrydowo", "")
+		job.Location += location
+	}
 
 	var htmlBuilder strings.Builder
 
@@ -148,28 +153,42 @@ func (p *NoFluffScraper) extractDataFromHTML(html string, url string) (scraper.J
 	job.Description = htmlBuilder.String()
 
 	doc.Find(skillsSelector).Each(func(_ int, s *goquery.Selection) {
-		t := strings.TrimSpace(s.Text())
-		if t != "" {
-			job.Skills = append(job.Skills, t)
+		rawText := strings.ReplaceAll(s.Text(), "Obowiązkowe", "")
+
+		lines := strings.Split(rawText, "\n")
+
+		var result []string
+		for _, line := range lines {
+			cleaned := strings.TrimSpace(strings.ReplaceAll(line, "\u00a0", " "))
+
+			if cleaned != "" {
+				result = append(result, cleaned)
+			}
 		}
+		job.Skills = result
 	})
-	doc.Find("common-posting-salaries-list div.salary").Each(func(_ int, s *goquery.Selection) {
-		description := strings.ToLower(s.Find(".paragraph").Text())
 
-		if strings.Contains(description, "godzinę") || strings.Contains(description, "hour") {
-			return
-		}
+	allSalaries := doc.Find("common-posting-salaries-list div.salary")
+	filteredSalaries := allSalaries.Not("[data-cy='JobOffer_SalaryDetails'] div.salary")
 
+	filteredSalaries.Each(func(_ int, s *goquery.Selection) {
 		rawAmount := s.Find("h4").Text()
-		amount := strings.TrimSpace(strings.ReplaceAll(rawAmount, "\u00a0", " "))
+		rawDesc := s.Find(".paragraph").Text()
+		lowerDesc := strings.ToLower(rawDesc)
+
+		fullInfo := strings.Join(strings.Fields(strings.ReplaceAll(rawAmount+" "+rawDesc, "\u00a0", " ")), " ")
+		fullInfo = strings.ReplaceAll(fullInfo, "oblicz \"na rękę\"", "")
+		fullInfo = strings.ReplaceAll(fullInfo, "oblicz netto", "")
 
 		switch {
-		case strings.Contains(description, "uop") || strings.Contains(description, "employment"):
-			job.SalaryEmployment = amount
-		case strings.Contains(description, "uz") || strings.Contains(description, "mandate"):
-			job.SalaryContract = amount
-		case strings.Contains(description, "b2b"):
-			job.SalaryB2B = amount
+		case strings.Contains(lowerDesc, "uop") || strings.Contains(lowerDesc, "employment"):
+			job.SalaryEmployment = fullInfo
+
+		case strings.Contains(lowerDesc, "uz") || strings.Contains(lowerDesc, "mandate"):
+			job.SalaryContract = fullInfo
+
+		case strings.Contains(lowerDesc, "b2b"):
+			job.SalaryB2B = fullInfo
 		}
 	})
 
