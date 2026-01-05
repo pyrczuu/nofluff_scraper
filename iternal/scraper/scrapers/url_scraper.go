@@ -15,12 +15,12 @@ import (
 
 const (
 	browserDataDir = `~/.config/google-chrome/Default`
-	source         = "https://nofluffjobs.com/pl/artificial-intelligence?criteria=category%3Dsys-administrator,business-analyst,architecture,backend,data,ux,devops,erp,embedded,frontend,fullstack,game-dev,mobile,project-manager,security,support,testing,other"
+	//source         = "https://nofluffjobs.com/pl/artificial-intelligence?criteria=category%3Dsys-administrator,business-analyst,architecture,backend,data,ux,devops,erp,embedded,frontend,fullstack,game-dev,mobile,project-manager,security,support,testing,other"
 	// tylko do testow
-	//source                = "https://nofluffjobs.com/pl/Golang"
+	source                = "https://nofluffjobs.com/pl/Golang"
 	minTimeMs             = 3000
 	maxTimeMs             = 4000
-	prefix                = "https://nofluffjobs.com/pl/job/"
+	prefix                = "https://nofluffjobs.com"
 	offerSelector         = "a.posting-list-item"
 	cookiesButtonSelector = "button#save"                                // zamknięcie cookies
 	loginButtonSelector   = "button[.//inline-icon[@maticon=\"close\"]]" // zamknięcie prośby o zalogowanie
@@ -102,7 +102,6 @@ func ScrollAndRead(parentCtx context.Context) ([]string, error) {
 				if err != nil {
 					return err
 				}
-				log.Println(nodes)
 				if len(nodes) == 0 {
 					break
 				}
