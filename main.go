@@ -28,10 +28,10 @@ func main() {
 	//if err != nil {
 	//	log.Fatal(err)
 	//}
-	urls := []string{
-		"https://nofluffjobs.com/pl/job/senior-android-engineer-ringier-axel-springer-tech-wroclaw-4",
-		"https://nofluffjobs.com/pl/job/analityk-biznesowo-systemowy-connectis--remote-6",
-		"https://nofluffjobs.com/pl/job/senior-c-go-engineer-motorola-solutions-systems-polska-krakow-1"}
+	urls, err := scrapers.ScrollAndRead(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
 	noFluffScraper := scrapers.NewNoFluffScraper(urls)
 
 	scrapersList := []scraper.Scraper{noFluffScraper}
